@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models.embeddings import EmbeddingService
+from personal_agent.inference.embeddings import EmbeddingService
 
 
 def retrieve_vector_only(db: Session, user_id: int, query: str, embedding_service: EmbeddingService, k: int = 5) -> list[int]:

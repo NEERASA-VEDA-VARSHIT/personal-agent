@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.memory.retrieval import RetrievalPipeline
+from personal_agent.memory.retrieval import RetrievalPipeline
 
 
 def retrieve_hybrid_rerank(db: Session, user_id: int, query: str, pipeline: RetrievalPipeline, k: int = 5) -> list[int]:

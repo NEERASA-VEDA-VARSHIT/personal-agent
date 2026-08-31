@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.memory.retrieval import CandidateRetriever, QueryAnalyzer
+from personal_agent.memory.retrieval import CandidateRetriever, QueryAnalyzer
 
 
 def retrieve_hybrid(db: Session, user_id: int, query: str, retriever: CandidateRetriever, k: int = 5) -> list[int]:

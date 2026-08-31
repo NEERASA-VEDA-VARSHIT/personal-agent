@@ -16,17 +16,27 @@ from unittest.mock import MagicMock
 import sys
 from pathlib import Path
 
-# Make `app` importable when running as `python -m evaluation.runner` or `python evaluation/runner.py`
+# Make `personal_agent` (src) and legacy `app` importable
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "api"))
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, Memory, MemorySource, User
-from app.memory.lifecycle import MemoryLifecycle
-from app.memory.retrieval import CandidateRetriever, RetrievalPipeline
-from app.models.embeddings import EmbeddingService
-from app.memory.policy import MemoryStatus, SourceType
+try:
+    from personal_agent.persistence.models import Base, Memory, MemorySource, User
+except ImportError:
+    from app.db.models import Base, Memory, MemorySource, User  # fallback shim
+try:
+    from personal_agent.memory.lifecycle import MemoryLifecycle
+    from personal_agent.memory.retrieval import CandidateRetriever, RetrievalPipeline
+    from personal_agent.inference.embeddings import EmbeddingService
+    from personal_agent.memory.policy import MemoryStatus, SourceType
+except ImportError:
+    from app.memory.lifecycle import MemoryLifecycle
+    from app.memory.retrieval import CandidateRetriever, RetrievalPipeline
+    from app.models.embeddings import EmbeddingService
+    from app.memory.policy import MemoryStatus, SourceType
 from evaluation.baselines.vector_only import retrieve_vector_only
 from evaluation.baselines.hybrid import retrieve_hybrid
 from evaluation.baselines.hybrid_rerank import retrieve_hybrid_rerank

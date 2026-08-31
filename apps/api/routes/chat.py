@@ -1,0 +1,2 @@
+# Chat route placeholder
+
