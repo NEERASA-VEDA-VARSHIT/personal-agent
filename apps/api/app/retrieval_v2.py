@@ -338,13 +338,23 @@ def _status_score(mem: Memory) -> float:
 
 
 class Reranker:
-    """Reranks filtered candidates into final relevance order."""
+    """Reranks filtered candidates into final relevance order.
+
+    NOTE: weights below are INITIAL HEURISTICS, not scientifically validated.
+    They are an experiment to be measured in evaluation (M7):
+
+        Retrieval experiment:
+            baseline cosine similarity vs hybrid retrieval vs hybrid + reranking
+
+        Measure Recall@K / Precision@K / MRR on a labelled dataset to test
+        whether this weighting actually improves retrieval.
+    """
 
     def __init__(
         self,
         weights: dict[str, float] | None = None,
     ):
-        # weights must sum to ~1 for interpretability, but not enforced
+        # Initial heuristic weights — to be validated via evaluation
         self.weights = weights or {
             "semantic": 0.35,
             "lexical": 0.15,
