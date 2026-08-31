@@ -1,44 +1,99 @@
 # 05 — Repository Structure
 
+## Target architecture
+
+This is the target we are migrating toward. Do not create all folders at once — a folder structure is an architecture, not a checklist.
+
 ```text
 personal-agent/
 │
 ├── apps/
-│   ├── web/                         # Next.js frontend
+│   ├── api/
 │   │   ├── app/
-│   │   ├── components/
-│   │   ├── features/
-│   │   └── lib/
+│   │   │   ├── main.py
+│   │   │   │
+│   │   │   ├── api/
+│   │   │   │   ├── routes/
+│   │   │   │   │   ├── chat.py
+│   │   │   │   │   ├── memories.py
+│   │   │   │   │   └── decisions.py
+│   │   │   │   └── dependencies.py
+│   │   │   │
+│   │   │   ├── agent/
+│   │   │   │   ├── agent.py
+│   │   │   │   ├── state.py
+│   │   │   │   ├── prompts.py
+│   │   │   │   └── orchestration.py
+│   │   │   │
+│   │   │   ├── models/
+│   │   │   │   ├── gateway.py
+│   │   │   │   ├── providers/
+│   │   │   │   │   ├── openai.py
+│   │   │   │   │   ├── ollama.py
+│   │   │   │   │   └── base.py
+│   │   │   │   └── embeddings.py
+│   │   │   │
+│   │   │   ├── memory/
+│   │   │   │   ├── models.py
+│   │   │   │   ├── repository.py
+│   │   │   │   ├── extraction.py
+│   │   │   │   ├── lifecycle.py
+│   │   │   │   ├── retrieval.py
+│   │   │   │   ├── reranking.py
+│   │   │   │   ├── policy.py
+│   │   │   │   └── provenance.py
+│   │   │   │
+│   │   │   ├── decision/
+│   │   │   │   ├── models.py
+│   │   │   │   ├── question_policy.py
+│   │   │   │   ├── analyzer.py
+│   │   │   │   ├── engine.py
+│   │   │   │   └── evaluator.py
+│   │   │   │
+│   │   │   ├── db/
+│   │   │   │   ├── models.py
+│   │   │   │   ├── session.py
+│   │   │   │   └── migrations/
+│   │   │   │
+│   │   │   ├── privacy/
+│   │   │   │   ├── classifier.py
+│   │   │   │   ├── policy.py
+│   │   │   │   └── router.py
+│   │   │   │
+│   │   │   ├── evaluation/
+│   │   │   │   ├── datasets/
+│   │   │   │   ├── metrics.py
+│   │   │   │   └── runner.py
+│   │   │   │
+│   │   │   └── config.py
+│   │   │
+│   │   └── tests/
+│   │       ├── memory/
+│   │       ├── retrieval/
+│   │       ├── decision/
+│   │       ├── privacy/
+│   │       └── integration/
 │   │
-│   └── api/                         # FastAPI backend
+│   └── web/
 │       ├── app/
-│       │   ├── api/
-│       │   ├── agents/
-│       │   ├── memory/
-│       │   ├── models/
-│       │   ├── tools/
-│       │   ├── safety/
-│       │   ├── policies/
-│       │   ├── evaluation/
-│       │   └── db/
+│       ├── components/
+│       ├── lib/
 │       └── tests/
 │
 ├── packages/
-│   ├── schemas/                     # Shared contracts
-│   └── prompts/                     # Versioned prompt templates
+│   └── shared/
+│       ├── schemas/
+│       └── types/
 │
-├── memory/
-│   ├── migrations/
-│   ├── retrieval/
-│   ├── extraction/
-│   └── fixtures/
+├── infra/
+│   ├── docker/
+│   ├── postgres/
+│   └── ollama/
 │
-├── evaluation/
-│   ├── datasets/
-│   ├── benchmarks/
-│   ├── metrics/
-│   ├── scenarios/
-│   └── reports/
+├── scripts/
+│   ├── seed.py
+│   ├── evaluate.py
+│   └── dev.py
 │
 ├── docs/
 │   ├── 01-PRD.md
@@ -46,25 +101,105 @@ personal-agent/
 │   ├── 03-MEMORY-DESIGN.md
 │   ├── 04-TECH-STACK.md
 │   ├── 05-FOLDER-STRUCTURE.md
-│   ├── 06-UI-UX-FLOW.md
-│   ├── 07-AGENT-POLICY.md
-│   ├── 08-PRIVACY-SECURITY.md
-│   ├── 09-EVALUATION.md
-│   ├── 10-ROADMAP.md
-│   ├── 11-RESEARCH-NOTES.md
-│   └── 12-PORTFOLIO.md
+│   ├── 06-UI-FLOW.md
+│   ├── 07-PRIVACY.md
+│   ├── 08-EVALUATION.md
+│   ├── 09-RESEARCH.md
+│   ├── adr/
+│   │   ├── 001-postgres-pgvector.md
+│   │   ├── 002-provider-abstraction.md
+│   │   └── 003-memory-lifecycle.md
+│   └── milestones/
+│       ├── M0-M6-COMPLETION.md
+│       └── M6.5-M6.9.md
 │
-├── infra/
-│   ├── docker/
-│   ├── compose/
-│   └── scripts/
-│
-├── .github/
-│   └── workflows/
-│
+├── .env.example
+├── .gitignore
 ├── docker-compose.yml
+├── pyproject.toml
 ├── README.md
 └── LICENSE
+```
+
+## Current stage (what to actually create now)
+
+For our current stage, keep the tree smaller and migrate incrementally:
+
+```text
+apps/api/app/
+├── agent/
+├── models/
+├── memory/        # domain: what/extraction/retrieval/lifecycle/provenance
+├── decision/      # domain: question_policy/analyzer/engine
+├── db/            # infra: SQLAlchemy models, sessions, migrations
+└── config.py
+
+apps/api/tests/
+├── memory/
+├── retrieval/
+└── decision/
+
+docs/
+├── ...
+└── milestones/
+```
+
+Create `privacy/`, `web/`, `evaluation/`, etc. **when those components actually exist**.
+
+## Key separation
+
+### `db/` vs `memory/`
+
+Different responsibilities:
+
+- **`db/` — Infrastructure**: SQLAlchemy models, sessions, migrations, transactions.
+
+- **`memory/` — Domain logic**: What constitutes a memory? How is it extracted? Retrieved? How does it evolve? How is it forgotten?
+
+Dependency direction:
+
+```text
+memory/
+      ↓
+repository
+      ↓
+db/
+      ↓
+PostgreSQL
+```
+
+Not all memory logic inside `db/`.
+
+### `decision/` as its own domain
+
+```text
+decision/
+├── question_policy.py  → "Should I ask?"
+├── analyzer.py         → "What information is missing?"
+├── engine.py           → "What are options/tradeoffs?"
+└── evaluator.py        → "How good was the decision support?"
+```
+
+- **Memory** provides context.
+- **Decision** provides reasoning.
+- **Agent** provides orchestration.
+- **Model gateway** provides intelligence.
+- **Database** provides persistence.
+
+```text
+                    AGENT
+                      │
+          ┌───────────┼───────────┐
+          ↓           ↓           ↓
+       MEMORY      DECISION    PRIVACY
+          │           │
+          └─────┬─────┘
+                ↓
+           MODEL GATEWAY
+                │
+       ┌────────┼────────┐
+       ↓        ↓        ↓
+    Ollama   OpenAI    Other
 ```
 
 ## Architectural rule
@@ -101,3 +236,7 @@ apps/api/app/models/
 ```
 
 The OpenAI-compatible API should be treated as an adapter implementation, not the project-wide abstraction. The app talks to a stable interface, while the provider layer decides how to route to OpenAI, Ollama, vLLM, or another backend.
+
+## Migration rule
+
+Don't refactor the entire repository in one giant commit. Migrate toward the target as we implement M6.8 onward, keeping `db/` and `memory/`/`decision/` separated.
