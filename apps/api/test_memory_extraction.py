@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, Conversation, Memory, Message, User
 from app.memory_extraction import MemoryExtractionService
-from app.memory_policy import MemoryCandidate, MemoryPolicy, MemoryType
+from app.memory_policy import MemoryCandidate, MemoryPolicy, MemoryType, SourceType, MemoryStatus
 
 
 class TestMemoryPolicy(unittest.TestCase):
@@ -22,69 +22,44 @@ class TestMemoryPolicy(unittest.TestCase):
             hypothesis_confidence_threshold=0.60,
         )
 
-    def test_explicit_memories_always_stored(self) -> None:
-        """Explicit memories should always be stored."""
+    def test_fact_memories_always_stored(self) -> None:
+        """FACT memories should always be stored."""
         candidate = MemoryCandidate(
-            memory_type=MemoryType.EXPLICIT,
-            content="I want to learn Rust",
+            memory_type=MemoryType.FACT,
+            content="I have 5 years of Python experience",
             confidence=0.99,
             reason="User stated directly",
-            source_markers=["I want to learn Rust"],
+            source_markers=["I've been using Python for the last 5 years"],
         )
 
         self.assertTrue(self.policy.should_store(candidate))
         self.assertFalse(self.policy.should_ask_user(candidate))
 
-    def test_high_confidence_candidate_stored(self) -> None:
-        """Candidate with confidence >= threshold should be stored."""
+    def test_preference_memories_always_stored(self) -> None:
+        """PREFERENCE memories should always be stored."""
         candidate = MemoryCandidate(
-            memory_type=MemoryType.CANDIDATE,
+            memory_type=MemoryType.PREFERENCE,
             content="Prefers Python over Java",
-            confidence=0.85,
-            reason="Inferred from conversation",
-            source_markers=["I love Python", "Java feels verbose"],
+            confidence=0.95,
+            reason="User stated preference",
+            source_markers=["I prefer Python"],
         )
 
         self.assertTrue(self.policy.should_store(candidate))
         self.assertFalse(self.policy.should_ask_user(candidate))
 
-    def test_borderline_candidate_asks_user(self) -> None:
-        """Candidate with borderline confidence should ask user."""
+    def test_goal_memories_always_stored(self) -> None:
+        """GOAL memories should always be stored."""
         candidate = MemoryCandidate(
-            memory_type=MemoryType.CANDIDATE,
-            content="Interested in machine learning",
-            confidence=0.70,  # Below 0.75 but above 70% of threshold
-            reason="Mentioned ML several times",
-            source_markers=["ML is interesting", "AI research appeals to me"],
+            memory_type=MemoryType.GOAL,
+            content="Become a staff engineer in 5 years",
+            confidence=0.99,
+            reason="User stated goal directly",
+            source_markers=["I want to become a staff engineer in 5 years"],
         )
 
-        self.assertFalse(self.policy.should_store(candidate))
-        self.assertTrue(self.policy.should_ask_user(candidate))
-
-    def test_low_confidence_candidate_rejected(self) -> None:
-        """Candidate with low confidence should be rejected."""
-        candidate = MemoryCandidate(
-            memory_type=MemoryType.CANDIDATE,
-            content="Might like competitive programming",
-            confidence=0.50,
-            reason="Brief mention",
-            source_markers=["coding challenges seem fun"],
-        )
-
-        self.assertFalse(self.policy.should_store(candidate))
+        self.assertTrue(self.policy.should_store(candidate))
         self.assertFalse(self.policy.should_ask_user(candidate))
-
-    def test_inference_never_stored(self) -> None:
-        """Inferences should never be stored as memories."""
-        candidate = MemoryCandidate(
-            memory_type=MemoryType.INFERENCE,
-            content="User seems anxious about career change",
-            confidence=0.80,
-            reason="Tone analysis",
-            source_markers=["hesitant tone", "multiple questions"],
-        )
-
-        self.assertFalse(self.policy.should_store(candidate))
 
     def test_hypothesis_with_evidence_stored(self) -> None:
         """Hypothesis with evidence and confidence should be stored."""
@@ -113,7 +88,7 @@ class TestMemoryPolicy(unittest.TestCase):
     def test_validate_method_returns_dict(self) -> None:
         """Validate method should return detailed decision dict."""
         candidate = MemoryCandidate(
-            memory_type=MemoryType.EXPLICIT,
+            memory_type=MemoryType.FACT,
             content="Goal: become a staff engineer",
             confidence=0.98,
             reason="User stated goal",
@@ -177,14 +152,14 @@ class TestMemoryExtraction(unittest.TestCase):
         {
           "memories": [
             {
-              "type": "explicit",
+              "type": "goal",
               "content": "I want to specialize in distributed systems",
               "confidence": 0.99,
               "reason": "User stated goal",
               "source_markers": ["I want to specialize in distributed systems"]
             },
             {
-              "type": "candidate",
+              "type": "preference",
               "content": "Prefers backend work",
               "confidence": 0.82,
               "reason": "Multiple mentions",
@@ -197,9 +172,9 @@ class TestMemoryExtraction(unittest.TestCase):
         candidates = self.extraction_service._parse_extraction_response(response)
 
         self.assertEqual(len(candidates), 2)
-        self.assertEqual(candidates[0].memory_type, MemoryType.EXPLICIT)
+        self.assertEqual(candidates[0].memory_type, MemoryType.GOAL)
         self.assertEqual(candidates[0].confidence, 0.99)
-        self.assertEqual(candidates[1].memory_type, MemoryType.CANDIDATE)
+        self.assertEqual(candidates[1].memory_type, MemoryType.PREFERENCE)
 
     def test_parse_invalid_json_returns_empty(self) -> None:
         """Test parsing invalid JSON returns empty list."""
@@ -245,23 +220,23 @@ class TestMemoryExtraction(unittest.TestCase):
         self.session.add(msg)
         self.session.commit()
 
-        # Mock LLM response with two candidates
+        # Mock LLM response with one approved and one needs-review
         mock_response = """
         {
           "memories": [
             {
-              "type": "explicit",
+              "type": "goal",
               "content": "Wants to learn Rust",
               "confidence": 0.99,
               "reason": "Directly stated",
               "source_markers": ["I want to learn Rust"]
             },
             {
-              "type": "candidate",
+              "type": "hypothesis",
               "content": "Interested in systems programming",
-              "confidence": 0.60,
-              "reason": "Learning Rust suggests interest",
-              "source_markers": ["I want to learn Rust"]
+              "confidence": 0.55,
+              "reason": "Learning Rust suggests interest (borderline)",
+              "source_markers": ["I want to learn Rust", "systems work is important"]
             }
           ]
         }
@@ -278,8 +253,8 @@ class TestMemoryExtraction(unittest.TestCase):
 
         # Verify results
         self.assertEqual(len(result["candidates"]), 2)
-        self.assertEqual(len(result["approved"]), 1)  # Explicit memory
-        self.assertEqual(len(result["needs_review"]), 1)  # Borderline candidate
+        self.assertEqual(len(result["approved"]), 1)  # GOAL memory (always approved)
+        self.assertEqual(len(result["needs_review"]), 1)  # HYPOTHESIS at borderline confidence
 
     def test_store_approved_memories(self) -> None:
         """Test storing approved memories to database."""
@@ -293,7 +268,7 @@ class TestMemoryExtraction(unittest.TestCase):
 
         # Create approved candidates
         candidate = MemoryCandidate(
-            memory_type=MemoryType.EXPLICIT,
+            memory_type=MemoryType.FACT,
             content="I love Python",
             confidence=0.99,
             reason="User stated",
@@ -318,11 +293,14 @@ class TestMemoryExtraction(unittest.TestCase):
         # Verify
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0].content, "I love Python")
-        self.assertEqual(stored[0].memory_type, "explicit")
+        self.assertEqual(stored[0].type, "fact")  # New v2 field
+        self.assertEqual(stored[0].status, MemoryStatus.ACTIVE.value)
 
         # Verify database persistence
         retrieved = self.session.query(Memory).filter(Memory.id == stored[0].id).first()
         self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved.type, "fact")
+        self.assertEqual(retrieved.status, MemoryStatus.ACTIVE.value)
         self.assertEqual(retrieved.content, "I love Python")
 
 

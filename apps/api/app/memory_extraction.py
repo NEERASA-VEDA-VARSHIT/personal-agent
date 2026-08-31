@@ -7,8 +7,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Conversation, Memory, MemoryEvent, MemorySource
-from app.memory_policy import MemoryCandidate, MemoryPolicy, MemoryType
+from app.db.models import Conversation, Memory, MemoryEvent, MemorySource, MemoryAudit
+from app.memory_policy import MemoryCandidate, MemoryPolicy, MemoryType, SourceType, MemoryStatus
 from app.models import ModelGateway
 
 
@@ -40,7 +40,7 @@ Return a JSON object with this structure:
 {
   "memories": [
     {
-      "type": "explicit|candidate|hypothesis",
+      "type": "fact|preference|goal|episode|decision|relationship|hypothesis",
       "content": "What to remember",
       "confidence": 0.0-1.0,
       "reason": "Why this matters",
@@ -51,17 +51,27 @@ Return a JSON object with this structure:
 
 Guidelines:
 
-- EXPLICIT: User directly stated "Remember that..." or clearly stated a goal/preference
-  Confidence: 0.95-1.0
+- FACT: Verifiable information (e.g., "User has 5 years of Python experience")
+  Confidence: 0.95-1.0 when from direct statement
 
-- CANDIDATE: Inferred from conversation but not explicitly stated
-  Confidence: 0.60-0.95
-  Examples: "They seem to enjoy X", "They mentioned wanting to Y"
+- PREFERENCE: User's stated likes, dislikes, or preferences
+  Confidence: 0.90-1.0 when directly stated
 
-- HYPOTHESIS: Speculative inference with supporting evidence
-  Confidence: 0.40-0.80
-  Only include if you have multiple supporting quotes
-  Examples: "User might be interested in distributed systems" (with 2+ supporting statements)
+- GOAL: User's stated objectives or aspirations
+  Confidence: 0.90-1.0 when directly stated
+
+- EPISODE: Significant event or story from user's experience
+  Confidence: 0.85-1.0 when detailed
+
+- DECISION: Important choice or commitment
+  Confidence: 0.85-1.0 when clearly stated
+
+- RELATIONSHIP: Connection between concepts or people
+  Confidence: 0.70-0.95 based on evidence
+
+- HYPOTHESIS: Speculative inference about user
+  Confidence: 0.50-0.80 with multiple supporting quotes
+  Only include if you have 2+ supporting statements
 
 Do NOT:
 - Create vague memories
@@ -159,34 +169,37 @@ Only return valid JSON."""
         for approved in approved_candidates:
             candidate: MemoryCandidate = approved["candidate"]
 
-            # Create memory
+            # Create memory with v2 schema
             memory = Memory(
                 user_id=user_id,
                 source_conversation_id=conversation_id,
-                memory_type=candidate.memory_type.value,
+                type=candidate.memory_type.value,  # FACT, PREFERENCE, GOAL, etc.
+                memory_type=candidate.memory_type.value,  # Backward compatibility
                 content=candidate.content,
                 confidence=candidate.confidence,
+                status=MemoryStatus.ACTIVE.value,  # Direct store (policy already validated)
                 is_active=True,
             )
             db.add(memory)
             db.flush()
 
-            # Add source citation
+            # Add source citation with MODEL_EXTRACTED origin
             source = MemorySource(
                 memory_id=memory.id,
-                source_type="conversation",
+                source_type=SourceType.MODEL_EXTRACTED.value,
                 source_ref=f"conversation_{conversation_id}",
                 confidence=candidate.confidence,
             )
             db.add(source)
 
-            # Add creation event
-            event = MemoryEvent(
+            # Add creation audit record
+            audit = MemoryAudit(
                 memory_id=memory.id,
-                event_type="created",
+                action="created",
                 reason=f"Extracted from conversation {conversation_id}",
+                actor="extraction_service",
             )
-            db.add(event)
+            db.add(audit)
 
             stored_memories.append(memory)
 
