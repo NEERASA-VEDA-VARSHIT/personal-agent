@@ -8,7 +8,15 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.db.models import Conversation, Memory, MemoryEvent, MemorySource, MemoryAudit
-from app.memory_policy import MemoryCandidate, MemoryPolicy, MemoryType, SourceType, MemoryStatus
+from app.memory_policy import (
+    EvidenceStrength,
+    MemoryCandidate,
+    MemoryPolicy,
+    MemoryStatus,
+    MemoryType,
+    SourceType,
+    Stability,
+)
 from app.models import ModelGateway
 
 
@@ -42,9 +50,12 @@ Return a JSON object with this structure:
     {
       "type": "fact|preference|goal|episode|decision|relationship|hypothesis",
       "content": "What to remember",
-      "confidence": 0.0-1.0,
       "reason": "Why this matters",
-      "source_markers": ["quoted text 1", "quoted text 2"]
+      "source_markers": ["quoted text 1", "quoted text 2"],
+      "source_type": "user_stated|model_extracted|model_inferred",
+      "evidence_strength": "high|moderate|low",
+      "stability": "stable|volatile|unknown",
+      "sensitivity": "public|private|confidential"
     }
   ]
 }
@@ -52,26 +63,32 @@ Return a JSON object with this structure:
 Guidelines:
 
 - FACT: Verifiable information (e.g., "User has 5 years of Python experience")
-  Confidence: 0.95-1.0 when from direct statement
+  evidence_strength: high when directly stated by user
 
 - PREFERENCE: User's stated likes, dislikes, or preferences
-  Confidence: 0.90-1.0 when directly stated
+  evidence_strength: high when directly stated
 
 - GOAL: User's stated objectives or aspirations
-  Confidence: 0.90-1.0 when directly stated
+  evidence_strength: high when directly stated
 
 - EPISODE: Significant event or story from user's experience
-  Confidence: 0.85-1.0 when detailed
+  evidence_strength: high when detailed
 
 - DECISION: Important choice or commitment
-  Confidence: 0.85-1.0 when clearly stated
+  evidence_strength: high when clearly stated
 
 - RELATIONSHIP: Connection between concepts or people
-  Confidence: 0.70-0.95 based on evidence
+  evidence_strength: high only with explicit evidence
 
 - HYPOTHESIS: Speculative inference about user
-  Confidence: 0.50-0.80 with multiple supporting quotes
+  evidence_strength: low or moderate, never high without direct confirmation
   Only include if you have 2+ supporting statements
+
+Rules for the new fields:
+- source_type: user_stated if the user said it verbatim, model_inferred if you inferred it
+- evidence_strength: high = verbatim + repeated, moderate = single clear statement, low = weak hint
+- stability: stable = long-term trait, volatile = could change soon, unknown = unclear
+- Do NOT invent a numeric confidence — use evidence_strength instead
 
 Do NOT:
 - Create vague memories
@@ -231,12 +248,27 @@ Only return valid JSON."""
 
             for mem_data in data.get("memories", []):
                 try:
+                    # Back-compat: old prompts still send "confidence"
+                    raw_conf = mem_data.get("confidence", 0.5)
+                    ev = mem_data.get("evidence_strength", "moderate")
+                    st = mem_data.get("stability", "unknown")
+                    src = mem_data.get("source_type", "model_extracted")
+                    try:
+                        source_type = SourceType(src)
+                    except ValueError:
+                        source_type = SourceType.MODEL_EXTRACTED
                     candidate = MemoryCandidate(
                         memory_type=MemoryType(mem_data["type"]),
                         content=mem_data["content"],
-                        confidence=float(mem_data["confidence"]),
                         reason=mem_data.get("reason", ""),
                         source_markers=mem_data.get("source_markers", []),
+                        source_type=source_type,
+                        evidence_strength=ev,
+                        stability=st,
+                        sensitivity=mem_data.get("sensitivity", "private"),
+                        confidence=float(raw_conf),
+                        model_confidence=float(raw_conf) if raw_conf is not None else None,
+                        requires_confirmation=bool(mem_data.get("requires_confirmation", False)),
                     )
                     candidates.append(candidate)
                 except (KeyError, ValueError, TypeError):

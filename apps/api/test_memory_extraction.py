@@ -62,13 +62,14 @@ class TestMemoryPolicy(unittest.TestCase):
         self.assertFalse(self.policy.should_ask_user(candidate))
 
     def test_hypothesis_with_evidence_stored(self) -> None:
-        """Hypothesis with evidence and confidence should be stored."""
+        """Hypothesis with strong evidence should be stored (high evidence_strength)."""
         candidate = MemoryCandidate(
             memory_type=MemoryType.HYPOTHESIS,
             content="User is interested in distributed systems",
-            confidence=0.75,
             reason="Multiple mentions across conversation",
             source_markers=["scaling is important", "microservices architecture", "consensus algorithms"],
+            evidence_strength="high",
+            source_type=SourceType.MODEL_EXTRACTED,
         )
 
         self.assertTrue(self.policy.should_store(candidate))

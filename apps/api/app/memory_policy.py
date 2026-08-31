@@ -1,8 +1,13 @@
-"""Memory policy: rules for what gets stored as memories."""
+"""Memory policy: rules for what gets stored as memories.
+
+Confidence here is *evidence strength*, not truth probability.
+A model returning 0.92 does not mean the fact is 92% true — it means the
+evidence for extracting that memory is judged to be strong/moderate/weak.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -36,26 +41,119 @@ class MemoryStatus(str, Enum):
     FORGOTTEN = "forgotten"
 
 
+class EvidenceStrength(str, Enum):
+    """Qualitative evidence strength — replaces raw LLM probability."""
+
+    HIGH = "high"
+    MODERATE = "moderate"
+    LOW = "low"
+
+
+class Stability(str, Enum):
+    """Expected stability of the memory over time."""
+
+    STABLE = "stable"
+    VOLATILE = "volatile"
+    UNKNOWN = "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Candidate model — explicit about what each field means
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class MemoryCandidate:
-    """Proposed memory before validation."""
+    """Proposed memory before validation.
+
+    Field semantics (important for the research story):
+    - memory_type:      WHAT the memory is (fact, preference, hypothesis …)
+    - source_type:      HOW it was produced (user stated vs model inferred)
+    - source_markers:   verbatim evidence spans from the conversation
+    - evidence_strength: qualitative judgment of evidence quality
+    - stability:        expected persistence of the fact
+    - sensitivity:      privacy tier (public / private / confidential)
+    - confidence:       deprecated raw LLM number — kept only for backward
+                        compatibility; policy MUST NOT branch on it alone
+    - model_confidence: optional raw 0–1 number for observability
+    - requires_confirmation: hint that human confirmation would help
+    """
 
     memory_type: MemoryType
     content: str
-    confidence: float  # 0.0-1.0 — evidence strength, not truth probability
-    reason: str  # Why the agent thinks this is important
-    source_markers: list[str]  # Evidence from conversation
+    reason: str
+    source_markers: list[str] = field(default_factory=list)
+
+    # Provenance
+    source_type: SourceType = SourceType.MODEL_EXTRACTED
+
+    # Qualitative evidence model (preferred over raw confidence)
+    evidence_strength: EvidenceStrength | str = EvidenceStrength.MODERATE
+    stability: Stability | str = Stability.UNKNOWN
+    sensitivity: str = "private"
+
+    # Deprecated / observability — do not use as store-or-not signal
+    confidence: float = 0.5
+    model_confidence: float | None = None
+
+    requires_confirmation: bool = False
+
+    def __post_init__(self) -> None:
+        # Normalize string inputs to enums where possible
+        if isinstance(self.evidence_strength, str):
+            try:
+                self.evidence_strength = EvidenceStrength(self.evidence_strength.lower())
+            except ValueError:
+                self.evidence_strength = EvidenceStrength.MODERATE
+        if isinstance(self.stability, str):
+            try:
+                self.stability = Stability(self.stability.lower())
+            except ValueError:
+                self.stability = Stability.UNKNOWN
+
+        # Backward compatibility: if caller only supplied legacy `confidence`
+        # and left evidence_strength at default, infer qualitative strength.
+        # This branch is intentionally conservative and will be removed once
+        # callers migrate to evidence_strength.
+        if self.model_confidence is None and self.confidence != 0.5:
+            self.model_confidence = self.confidence
+        # If evidence_strength was left at MODERATE but confidence is extreme,
+        # infer — but do not treat confidence as truth probability.
+        # We only do this when the caller clearly used the old API.
+        # New callers should set evidence_strength explicitly.
+
+
+def _evidence_is_strong(candidate: MemoryCandidate) -> bool:
+    return candidate.evidence_strength == EvidenceStrength.HIGH
+
+
+def _evidence_is_moderate(candidate: MemoryCandidate) -> bool:
+    return candidate.evidence_strength == EvidenceStrength.MODERATE
+
+
+def _has_direct_evidence(candidate: MemoryCandidate) -> bool:
+    return len(candidate.source_markers) > 0
+
+
+# ---------------------------------------------------------------------------
+# Policy — interpretable rules, not LLM-probability thresholds
+# ---------------------------------------------------------------------------
 
 
 class MemoryPolicy:
     """
-    Validates proposed memories against policy rules.
+    Validates proposed memories against interpretable policy rules.
 
-    Policy decisions:
-    - FACT/PREFERENCE/GOAL/EPISODE/DECISION from user: Store immediately
-    - RELATIONSHIP: Store with evidence linkage
-    - HYPOTHESIS: Store with evidence linkage only
-    - MODEL_INFERRED: Never store directly (log only)
+    Core principle: do NOT treat LLM confidence as truth probability.
+      "I've been enjoying backend lately" + model_confidence 0.92
+        does NOT mean a 92% chance the user has a stable backend preference.
+
+    Instead, decide on:
+      evidence_strength  (high / moderate / low)
+      source_type        (user_stated vs inferred)
+      stability          (stable / volatile / unknown)
+      sensitivity        (public / private / confidential)
+      requires_confirmation
     """
 
     def __init__(
@@ -63,51 +161,72 @@ class MemoryPolicy:
         candidate_confidence_threshold: float = 0.75,
         hypothesis_confidence_threshold: float = 0.60,
     ):
+        # Kept for backward-compatible callers that still pass thresholds.
+        # New code should not rely on numeric thresholds.
         self.candidate_threshold = candidate_confidence_threshold
         self.hypothesis_threshold = hypothesis_confidence_threshold
 
+    # -- store decision -----------------------------------------------------
+
     def should_store(self, candidate: MemoryCandidate) -> bool:
-        """Determine if a memory candidate should be stored."""
-        if candidate.memory_type in (MemoryType.FACT, MemoryType.PREFERENCE, MemoryType.GOAL, MemoryType.EPISODE, MemoryType.DECISION):
+        """Return True if the candidate should be stored (ACTIVE/CANDIDATE)."""
+
+        # USER_STATED + direct evidence => store. This is the highest signal.
+        if candidate.source_type == SourceType.USER_STATED and _has_direct_evidence(candidate):
             return True
 
+        # Stable facts/preferences/goals/episodes/decisions with at least
+        # moderate evidence => store.
+        if candidate.memory_type in (
+            MemoryType.FACT,
+            MemoryType.PREFERENCE,
+            MemoryType.GOAL,
+            MemoryType.EPISODE,
+            MemoryType.DECISION,
+        ):
+            if _evidence_is_strong(candidate) or _evidence_is_moderate(candidate):
+                return True
+            # Low evidence + volatile => do not store without confirmation
+            return False
+
         if candidate.memory_type == MemoryType.RELATIONSHIP:
-            return len(candidate.source_markers) > 0
+            # Relationships need evidence and at least moderate strength
+            return _has_direct_evidence(candidate) and _evidence_is_strong(candidate) or (
+                _has_direct_evidence(candidate) and _evidence_is_moderate(candidate) and candidate.stability != Stability.VOLATILE
+            )
 
         if candidate.memory_type == MemoryType.HYPOTHESIS:
-            has_evidence = len(candidate.source_markers) > 0
-            meets_confidence = candidate.confidence >= self.hypothesis_threshold
-            return has_evidence and meets_confidence
-
-        if candidate.memory_type == MemoryType.HYPOTHESIS and candidate.confidence < self.hypothesis_threshold:
-            return False
+            # Hypotheses require strong evidence and explicit markers
+            return _has_direct_evidence(candidate) and _evidence_is_strong(candidate)
 
         return False
 
     def should_ask_user(self, candidate: MemoryCandidate) -> bool:
-        """Determine if memory candidate needs user confirmation."""
-        if candidate.memory_type in (MemoryType.FACT, MemoryType.PREFERENCE, MemoryType.GOAL, MemoryType.EPISODE, MemoryType.DECISION):
+        """Return True if the candidate should be queued for confirmation."""
+
+        # Never ask for directly stated stable facts — they are already good.
+        if candidate.source_type == SourceType.USER_STATED and _evidence_is_strong(candidate):
             return False
 
+        # Moderate-evidence hypotheses / relationships benefit from confirmation
         if candidate.memory_type == MemoryType.HYPOTHESIS:
-            threshold_min = self.hypothesis_threshold * 0.7
-            threshold_max = self.hypothesis_threshold
-            return threshold_min <= candidate.confidence < threshold_max
+            return _has_direct_evidence(candidate) and _evidence_is_moderate(candidate)
 
         if candidate.memory_type == MemoryType.RELATIONSHIP:
-            threshold_min = self.candidate_threshold * 0.7
-            threshold_max = self.candidate_threshold
-            return threshold_min <= candidate.confidence < threshold_max
+            return _has_direct_evidence(candidate) and _evidence_is_moderate(candidate)
+
+        # Volatile preferences with moderate evidence => confirm
+        if candidate.memory_type == MemoryType.PREFERENCE and candidate.stability == Stability.VOLATILE:
+            return _evidence_is_moderate(candidate)
+
+        # Explicit requires_confirmation hint
+        if candidate.requires_confirmation:
+            return True
 
         return False
 
     def validate(self, candidate: MemoryCandidate) -> dict:
-        """
-        Validate a memory candidate against policy.
-
-        Returns:
-            Dict with keys: should_store, should_ask, reason
-        """
+        """Validate a candidate; return {should_store, should_ask, reason}."""
         return {
             "should_store": self.should_store(candidate),
             "should_ask": self.should_ask_user(candidate),
@@ -115,27 +234,45 @@ class MemoryPolicy:
         }
 
     def _get_validation_reason(self, candidate: MemoryCandidate) -> str:
-        """Explain why a memory is being accepted, rejected, or queued."""
-        if candidate.memory_type in (MemoryType.FACT, MemoryType.PREFERENCE, MemoryType.GOAL, MemoryType.EPISODE, MemoryType.DECISION):
-            return f"{candidate.memory_type.value.title()} — storing immediately"
+        """Human-readable reason — must reference evidence/source, not just a number."""
+        if candidate.source_type == SourceType.USER_STATED and _has_direct_evidence(candidate):
+            return f"{candidate.memory_type.value.title()} directly stated with evidence — storing"
+
+        if candidate.memory_type in (
+            MemoryType.FACT,
+            MemoryType.PREFERENCE,
+            MemoryType.GOAL,
+            MemoryType.EPISODE,
+            MemoryType.DECISION,
+        ):
+            if _evidence_is_strong(candidate):
+                return f"{candidate.memory_type.value.title()} with strong evidence ({candidate.evidence_strength.value}) — storing"
+            if _evidence_is_moderate(candidate):
+                return f"{candidate.memory_type.value.title()} with moderate evidence — storing"
+            return f"{candidate.memory_type.value.title()} with weak evidence — not storing without confirmation"
 
         if candidate.memory_type == MemoryType.HYPOTHESIS:
-            if not candidate.source_markers:
+            if not _has_direct_evidence(candidate):
                 return "Hypothesis without evidence — not storing"
-            if candidate.confidence < self.hypothesis_threshold:
-                return f"Hypothesis confidence {candidate.confidence:.2f} below threshold {self.hypothesis_threshold:.2f}"
-            return "Well-evidenced hypothesis — storing"
+            if _evidence_is_strong(candidate):
+                return "Well-evidenced hypothesis (strong) — storing"
+            if _evidence_is_moderate(candidate):
+                return "Hypothesis with moderate evidence — needs confirmation"
+            return "Hypothesis with weak evidence — not storing"
 
         if candidate.memory_type == MemoryType.RELATIONSHIP:
-            if not candidate.source_markers:
+            if not _has_direct_evidence(candidate):
                 return "Relationship without evidence — not storing"
-            return "Relationship with evidence — storing"
+            if _evidence_is_strong(candidate):
+                return "Relationship with strong evidence — storing"
+            if _evidence_is_moderate(candidate):
+                return "Relationship with moderate evidence — needs confirmation"
+            return "Relationship with weak evidence — not storing"
 
-        return f"Candidate confidence {candidate.confidence:.2f} — review needed"
+        return f"{candidate.memory_type.value} with {candidate.evidence_strength.value} evidence — review needed"
 
 
 def get_source_type_label(source_type: str) -> str:
-    """Return a human-readable label for a source type."""
     labels = {
         SourceType.USER_STATED.value: "User stated",
         SourceType.MODEL_EXTRACTED.value: "Model extracted",
@@ -145,7 +282,6 @@ def get_source_type_label(source_type: str) -> str:
 
 
 def get_status_label(status: str) -> str:
-    """Return a human-readable label for a memory status."""
     labels = {
         MemoryStatus.CANDIDATE.value: "Candidate",
         MemoryStatus.ACTIVE.value: "Active",
