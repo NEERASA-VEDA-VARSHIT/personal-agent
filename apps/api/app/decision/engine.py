@@ -1,19 +1,31 @@
 """
-M6: Decision Support Engine
+M6: Decision Support Engine (legacy) + M6.9 Assessment Engine (v2).
 
-Autonomous decision-making with stakes assessment, evidence analysis, and recommendations.
-Uses extracted memories + RAG pipeline + policy framework to evaluate and recommend decisions.
+M6.9 replaces numeric confidence (e.g. 78%) with qualitative assessment:
 
-Architecture:
-1. StakesAssessment: Evaluates decision impact and reversibility
-2. EvidenceAnalyzer: Weighs pro/con arguments with confidence scoring
-3. DecisionRecommender: Synthesizes recommendation with reasoning
+    Evidence strength: Moderate
+    Assessment: cautiously_positive
+    Main uncertainty: mentorship quality
+    What would change: if mentorship is poor, option B preferable
+
+Flow for v2 (LLM proposes → application validates):
+    User decision
+        ↓ QuestionPolicy → enough info?
+        ↓ Memory Retrieval → EvidenceBundle (known facts / retrieved context / unknowns / options / tradeoffs)
+        ↓ Decision Analysis (for / against)
+        ↓ LLM structured output
+        ↓ Validation layer
+        ↓ Final DecisionAssessment
 """
 
+from __future__ import annotations
+
+import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+from app.decision.models import Assessment, DecisionAssessment, EvidenceBundle, EvidenceStrength, RecommendationStrength
 from app.models.gateway import ModelGateway
 from app.memory.rag import RAGService
 
@@ -305,3 +317,192 @@ Based on this analysis, provide your recommendation in JSON format:
             "monitoring_plan": ["Track outcomes weekly", "Reassess if circumstances change"],
             "reversibility_note": f"Reversibility level: {stakes_assessment.reversibility.value}",
         }
+
+
+# ---------------------------------------------------------------------------
+# M6.9 — Assessment Engine v2 (LLM proposes → application validates)
+# ---------------------------------------------------------------------------
+
+_ALLOWED_ASSESSMENTS = {a.value for a in Assessment}
+_ALLOWED_EVIDENCE = {e.value for e in EvidenceStrength}
+
+
+def _validate_assessment(raw: dict, fallback_statement: str) -> DecisionAssessment:
+    """Validate LLM JSON before it becomes application state."""
+    assessment = raw.get("assessment", "neutral")
+    if assessment not in _ALLOWED_ASSESSMENTS:
+        assessment = "cautiously_positive" if raw.get("evidence_strength") == "moderate" else "neutral"
+    evidence = raw.get("evidence_strength", "moderate")
+    if evidence not in _ALLOWED_EVIDENCE:
+        evidence = "moderate"
+
+    def _list(key: str) -> list[str]:
+        v = raw.get(key, [])
+        return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
+
+    return DecisionAssessment(
+        decision_statement=raw.get("decision_statement", fallback_statement),
+        recommendation=raw.get("recommendation", raw.get("summary", "")) or "No recommendation",
+        assessment=assessment,
+        evidence_strength=evidence,
+        key_factors=_list("key_factors"),
+        uncertainties=_list("uncertainties"),
+        assumptions=_list("assumptions"),
+        alternatives=_list("alternatives"),
+        reasons_for=_list("reasons_for"),
+        reasons_against=_list("reasons_against"),
+        what_would_change=_list("what_would_change") or _list("what_would_change_my_recommendation"),
+        summary=raw.get("summary", raw.get("recommendation", "")) or "",
+    )
+
+
+def _fallback_assessment(
+    statement: str,
+    stakes: StakesAssessment | None,
+    evidence: EvidenceAnalysis | None,
+    bundle: EvidenceBundle | None,
+) -> DecisionAssessment:
+    """Heuristic fallback when LLM JSON fails — still qualitative, never numeric confidence."""
+    # evidence strength from bundle / evidence analysis
+    ev_strength = EvidenceStrength.MODERATE
+    if evidence is not None:
+        es = evidence.evidence_strength()
+        if es >= 0.7:
+            ev_strength = EvidenceStrength.STRONG
+        elif es <= 0.3:
+            ev_strength = EvidenceStrength.LIMITED
+    elif bundle and len(bundle.for_factors) + len(bundle.against_factors) >= 4:
+        ev_strength = EvidenceStrength.STRONG
+    elif bundle and not bundle.for_factors and not bundle.against_factors:
+        ev_strength = EvidenceStrength.LIMITED
+
+    # assessment from stakes + evidence ratio
+    assessment = Assessment.CAUTIOUSLY_POSITIVE
+    if evidence is not None:
+        ratio = evidence.evidence_ratio()
+        if ratio > 0.5:
+            assessment = Assessment.POSITIVE if ev_strength == EvidenceStrength.STRONG else Assessment.CAUTIOUSLY_POSITIVE
+        elif ratio < -0.3:
+            assessment = Assessment.CAUTIOUSLY_NEGATIVE
+        elif abs(ratio) < 0.2:
+            assessment = Assessment.NEUTRAL
+
+    return DecisionAssessment(
+        decision_statement=statement,
+        recommendation=f"Based on {len(bundle.for_factors) if bundle else 0} supporting and {len(bundle.against_factors) if bundle else 0} opposing factors.",
+        assessment=assessment,
+        evidence_strength=ev_strength,
+        key_factors=(bundle.for_factors[:2] if bundle else []) if bundle else [],
+        uncertainties=evidence.uncertainty_factors if evidence else (bundle.unknowns if bundle else []),
+        assumptions=bundle.assumptions if bundle and hasattr(bundle, "assumptions") else [],
+        alternatives=bundle.options if bundle else [],
+        reasons_for=bundle.for_factors if bundle else [],
+        reasons_against=bundle.against_factors if bundle else [],
+        what_would_change=["If key uncertainty resolves differently, reassess"] if bundle and bundle.unknowns else [],
+        summary=f"Evidence {ev_strength.value}; assessment {assessment.value}",
+    )
+
+
+class AssessmentEngine:
+    """Assessment-based decision support — does NOT emit numeric confidence.
+
+    LLM proposes structured JSON, this class validates and decides what is safe.
+    """
+
+    def __init__(self, gateway: ModelGateway | None = None):
+        from app.models import get_default_gateway
+
+        self.gateway = gateway or get_default_gateway()
+
+    def build_evidence_bundle(
+        self,
+        decision_statement: str,
+        stakes: StakesAssessment | None = None,
+        evidence: EvidenceAnalysis | None = None,
+        retrieved_memories: list | None = None,
+        unknowns: list[str] | None = None,
+        options: list[str] | None = None,
+    ) -> EvidenceBundle:
+        retrieved_context = []
+        if retrieved_memories:
+            for m in retrieved_memories:
+                # Support both Memory objects and (Memory, score) tuples
+                mem = m[0] if isinstance(m, (list, tuple)) else m
+                if hasattr(mem, "content"):
+                    retrieved_context.append(mem.content)
+                elif isinstance(mem, str):
+                    retrieved_context.append(mem)
+        return EvidenceBundle(
+            decision_statement=decision_statement,
+            known_facts=[s.description for s in (stakes.benefits + stakes.risks) if stakes] if stakes else [],
+            retrieved_context=retrieved_context,
+            unknowns=unknowns or (evidence.uncertainty_factors if evidence else []),
+            options=options or [],
+            tradeoffs=[],
+            for_factors=[e.argument for e in (evidence.pro_evidence if evidence else [])],
+            against_factors=[e.argument for e in (evidence.con_evidence if evidence else [])],
+        )
+
+    def assess(
+        self,
+        decision_statement: str,
+        stakes: StakesAssessment | None = None,
+        evidence: EvidenceAnalysis | None = None,
+        bundle: EvidenceBundle | None = None,
+        retrieved_memories: list | None = None,
+    ) -> DecisionAssessment:
+        bundle = bundle or self.build_evidence_bundle(
+            decision_statement, stakes=stakes, evidence=evidence, retrieved_memories=retrieved_memories
+        )
+
+        # Prompt for LLM — asks for assessment, not confidence
+        stakes_text = ""
+        if stakes:
+            stakes_text = f"Stakes: {stakes.reversibility.value} ({stakes.reversibility_explanation}); net impact {stakes.net_impact_score():.1f}"
+
+        prompt = f"""You are a decision-support assistant. Do NOT output numeric confidence.
+
+Decision: {decision_statement}
+{stakes_text}
+
+Known facts: {bundle.known_facts or 'none'}
+Retrieved personal context: {bundle.retrieved_context or 'none'}
+Unknowns: {bundle.unknowns or 'none'}
+Options: {bundle.options or 'none'}
+
+Evidence FOR: {bundle.for_factors or 'none'}
+Evidence AGAINST: {bundle.against_factors or 'none'}
+
+Return ONLY JSON with this schema:
+{{
+  "decision_statement": "...",
+  "recommendation": "1-2 sentence recommendation",
+  "assessment": "strongly_positive|positive|cautiously_positive|neutral|cautiously_negative|negative|strongly_negative",
+  "evidence_strength": "limited|moderate|strong",
+  "key_factors": ["factor 1"],
+  "uncertainties": ["uncertainty 1"],
+  "assumptions": ["assumption 1"],
+  "alternatives": ["alternative option"],
+  "reasons_for": ["reason for"],
+  "reasons_against": ["reason against"],
+  "what_would_change": ["what would flip the assessment"],
+  "summary": "brief summary"
+}}
+Rules: assessment must reflect evidence_strength, not overstate; list main uncertainty honestly.
+"""
+
+        try:
+            raw_text = self.gateway.generate(
+                [{"role": "user", "content": prompt}], temperature=0.2
+            )
+            start = raw_text.find("{")
+            end = raw_text.rfind("}") + 1
+            if start == -1 or end <= start:
+                raise ValueError("no json")
+            data = json.loads(raw_text[start:end])
+            return _validate_assessment(data, decision_statement)
+        except Exception:
+            return _fallback_assessment(decision_statement, stakes, evidence, bundle)
+
+    def assess_from_bundle(self, bundle: EvidenceBundle) -> DecisionAssessment:
+        return self.assess(bundle.decision_statement, bundle=bundle)
