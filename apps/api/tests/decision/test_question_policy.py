@@ -2,7 +2,7 @@
 
 import unittest
 
-from app.question_policy import (
+from app.decision.question_policy import (
     AmbiguityLevel,
     InformationImpact,
     MissingInformation,

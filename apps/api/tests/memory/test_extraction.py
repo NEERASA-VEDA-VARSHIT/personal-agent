@@ -9,8 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, Conversation, Memory, Message, User
-from app.memory_extraction import MemoryExtractionService
-from app.memory_policy import MemoryCandidate, MemoryPolicy, MemoryType, SourceType, MemoryStatus
+from app.memory.extraction import MemoryExtractionService
+from app.memory.policy import MemoryCandidate, MemoryPolicy, MemoryType, SourceType, MemoryStatus
 
 
 class TestMemoryPolicy(unittest.TestCase):

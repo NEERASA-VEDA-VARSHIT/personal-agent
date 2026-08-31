@@ -16,10 +16,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, Memory, MemoryRelation, MemorySource, User
-from app.embeddings import EmbeddingService
-from app.memory_lifecycle import MemoryLifecycle
-from app.memory_policy import MemoryStatus, SourceType
-from app.retrieval_v2 import (
+from app.models.embeddings import EmbeddingService
+from app.memory.lifecycle import MemoryLifecycle
+from app.memory.policy import MemoryStatus, SourceType
+from app.memory.retrieval import (
     CandidateRetriever,
     ContextBuilder,
     QueryAnalyzer,

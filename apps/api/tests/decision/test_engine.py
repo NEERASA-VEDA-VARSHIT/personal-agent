@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, Conversation, Message, User
-from app.decision_support import (
+from app.decision.engine import (
     DecisionRecommender,
     EvidenceAnalysis,
     Evidence,
@@ -19,7 +19,7 @@ from app.decision_support import (
     Stake,
     StakesAssessment,
 )
-from app.rag import RAGService
+from app.memory.rag import RAGService
 
 
 class TestStakesAssessment(unittest.TestCase):

@@ -9,8 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, Conversation, Memory, User
-from app.embeddings import EmbeddingService
-from app.rag import RAGService
+from app.models.embeddings import EmbeddingService
+from app.memory.rag import RAGService
 
 
 class TestRAGPipeline(unittest.TestCase):

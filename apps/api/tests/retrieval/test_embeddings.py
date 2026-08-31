@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, Memory, User
-from app.embeddings import EmbeddingService
+from app.models.embeddings import EmbeddingService
 
 
 class TestEmbeddingsAndRetrieval(unittest.TestCase):
@@ -67,7 +67,7 @@ class TestEmbeddingsAndRetrieval(unittest.TestCase):
 
     def test_cosine_similarity_identical_vectors(self) -> None:
         """Test that identical vectors have similarity 1.0."""
-        from app.embeddings import cosine_similarity
+        from app.models.embeddings import cosine_similarity
 
         vec = [1.0, 0.0, 0.0]
         similarity = cosine_similarity(vec, vec)
@@ -75,7 +75,7 @@ class TestEmbeddingsAndRetrieval(unittest.TestCase):
 
     def test_cosine_similarity_orthogonal_vectors(self) -> None:
         """Test that orthogonal vectors have similarity 0.0."""
-        from app.embeddings import cosine_similarity
+        from app.models.embeddings import cosine_similarity
 
         vec_a = [1.0, 0.0, 0.0]
         vec_b = [0.0, 1.0, 0.0]

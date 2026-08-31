@@ -9,8 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, Memory, MemoryAudit, MemoryRelation, User
-from app.memory_lifecycle import MemoryLifecycle, LifecycleError
-from app.memory_policy import EvidenceStrength, MemoryStatus, SourceType, Stability
+from app.memory.lifecycle import MemoryLifecycle, LifecycleError
+from app.memory.policy import EvidenceStrength, MemoryStatus, SourceType, Stability
 
 
 class TestMemoryLifecycle(unittest.TestCase):

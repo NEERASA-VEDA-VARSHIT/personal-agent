@@ -18,7 +18,7 @@ from app.db.models import (
     Message,
     User,
 )
-from app.memory_policy import MemoryStatus, SourceType
+from app.memory.policy import MemoryStatus, SourceType
 
 
 class TestMemoryV2Schema(unittest.TestCase):
